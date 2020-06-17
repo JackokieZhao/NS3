@@ -6,7 +6,7 @@ set(mpi_sources)
 set(mpi_headers)
 set(mpi_libraries)
 
-#if (${NS3_MPI})
+if (${NS3_MPI})
     set(mpi_sources
             model/point-to-point-remote-channel.cc
             )
@@ -16,7 +16,7 @@ set(mpi_libraries)
     set(mpi_libraries
             ${libmpi}
             )
-#endif()
+endif()
 
 set(source_files
         ${mpi_sources}
