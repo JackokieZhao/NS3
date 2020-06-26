@@ -46,8 +46,8 @@ namespace ns3 {
     static std::vector<double> snrValueTable5g;
     static std::vector<uint16_t> speedTable5g;
     static std::map<std::string, std::vector<std::vector<double>>> blerTable5g;
+    static std::map<std::string, std::vector<std::map<uint16_t,double>>> betaTable5g;
     static std::unordered_map<double, uint16_t> snrIndex5g;
-    static double beta5g = 1;
     bool LteMiesmErrorModel::errorDataLoaded = false;
     void LteMiesmErrorModel::LoadErrorData()
     {
@@ -115,16 +115,84 @@ namespace ns3 {
             }
         }
 
+
+        o = load_json("../../src/lte/model/BLER/beta_values.json");
+        {
+            auto temp = o["channel"].get<picojson::object>();
+            for (auto channel = temp.begin(); channel != temp.end(); channel++)
+            {
+                //std::cout << "ch " << channel->first << std::endl;
+                auto cur_channel = channel->second.get<picojson::object>()["numerology"].get<picojson::object>();
+                for (auto num = cur_channel.begin (); num != cur_channel.end (); num++)
+                {
+                    //std::cout << "num " << num->first << std::endl;
+                    auto cur_num = num->second.get<picojson::object>()["block_size"].get<picojson::object>();
+                    for (auto cb = cur_num.begin (); cb != cur_num.end (); cb++)
+                    {
+                        //std::cout << "cbsize " << cb->first << std::endl;
+                        std::vector<std::map<uint16_t,double>> tempMcs;
+                        auto cur_cb = cb->second.get<picojson::object>()["MCS"].get<picojson::object>();
+                        for (auto mcs = cur_cb.begin (); mcs != cur_cb.end (); mcs++)
+                        {
+                            //std::cout << "mcs " << mcs->first << std::endl;
+                            auto cur_mcs = mcs->second.get<picojson::object> ()["speed"].get<picojson::object>();
+                            std::map<uint16_t, double> speed_beta;
+                            for (auto speed = cur_mcs.begin (); speed != cur_mcs.end (); speed++)
+                            {
+                                //std::cout << "speed " << speed->first << std::endl;
+                                speed_beta.emplace(std::stoi(speed->first), speed->second.get<double>());
+                            }
+                            tempMcs.push_back (speed_beta);
+                        }
+                        std::stringstream ss;
+                        ss << channel->first << "_" << num->first << "_" << cb->first;
+                        std::string scen = ss.str();
+                        //std::cout << scen << std::endl;
+                        betaTable5g[scen] = tempMcs;
+                    }
+                }
+            }
+        }
         errorDataLoaded = true;
     }
 
     double
-    LteMiesmErrorModel::Mib (const SpectrumValue& sinr, const std::vector<int>& map, uint8_t mcs)
+    LteMiesmErrorModel::Mib (const SpectrumValue& sinr,
+                             const std::vector<int>& map,
+                             uint8_t mcs,
+                             std::string chan,
+                             int num,
+                             int size,
+                             double speed)
     {
         NS_LOG_FUNCTION (sinr << &map << (uint32_t) mcs);
 
         if (!errorDataLoaded)
+        {
             LoadErrorData();
+            return 0;
+        }
+
+        //Round size to nearest larger power of two
+        for (int i = 256; i <= 8192; i*=2)
+        {
+            if (size > i)
+                continue;
+            size = i;
+            break;
+        }
+        std::stringstream ss;
+        ss << chan << "_" << int(num) << "_" << size;
+        std::string betaKey = ss.str();
+        //std::cout << betaKey << std::endl;
+        //todo: interpolate beta with speed
+        double beta5g = 1;
+
+        if (betaTable5g.find(betaKey) != betaTable5g.end())
+            if (betaTable5g[betaKey][mcs].find(speed) != betaTable5g[betaKey][mcs].end())
+                beta5g = betaTable5g[betaKey][mcs][speed];
+            else
+                std::cout << "speed not listed : " << speed << std::endl;
 
         uint32_t n = map.size();
         double ex = 0;
@@ -186,15 +254,19 @@ namespace ns3 {
         std::stringstream ss;
         ss << chan << "_" << (int) num << "_" << (int) cbSize;
         std::string scen = ss.str();
-        return blerTable5g[scen][mcs][snrIndex];
+
+        double bler = 1.0;
+        if (blerTable5g.find(scen) != blerTable5g.end())
+            bler = blerTable5g[scen][mcs][snrIndex];
+        return bler;
     }
 
     TbStats_t
-    LteMiesmErrorModel::GetTbDecodificationStats (const SpectrumValue& sinr, const std::vector<int>& map, uint16_t size, uint8_t mcs, HarqProcessInfoList_t miHistory, uint8_t num, std::string chan)
+    LteMiesmErrorModel::GetTbDecodificationStats (const SpectrumValue& sinr, const std::vector<int>& map, uint16_t size, uint8_t mcs, HarqProcessInfoList_t miHistory, uint8_t num, std::string chan, double speed)
     {
         NS_LOG_FUNCTION (sinr << &map << (uint32_t) size << (uint32_t) mcs);
 
-        double snrEff = Mib(sinr, map, mcs);
+        double snrEff = Mib(sinr, map, mcs, chan, num, size, speed);
 
         if (map.size() == 0)
             return TbStats_t{};
